@@ -1,93 +1,38 @@
-import transformers
-import pandas as pd
-import pinecone
 import os
-import time
+import transformers
 
+from dotenv import load_dotenv
+from pinecone import Pinecone as PineconeClient
 from torch import cuda, bfloat16
-from datasets import load_dataset
-from langchain.chains import RetrievalQA
-from langchain.llms import HuggingFacePipeline
-from langchain.vectorstores import Pinecone
-from langchain.embeddings.huggingface import HuggingFaceEmbeddings
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough, RunnableParallel
+from langchain_huggingface import HuggingFaceEmbeddings, HuggingFacePipeline
+from langchain_pinecone import PineconeVectorStore
 
-#----------------------Defining the embedding model----------------------
-embed_model_id = 'sentence-transformers/all-MiniLM-L6-v2'
+load_dotenv()
+
+EMBED_MODEL_ID = 'sentence-transformers/all-MiniLM-L6-v2'
+MODEL_ID = 'meta-llama/Llama-2-7b-chat-hf'
+INDEX_NAME = 'lawqa-llama2'
 
 device = f'cuda:{cuda.current_device()}' if cuda.is_available() else 'cpu'
 
+#---------------------- Embedding model ----------------------
 embed_model = HuggingFaceEmbeddings(
-    model_name=embed_model_id,
+    model_name=EMBED_MODEL_ID,
     model_kwargs={'device': device},
     encode_kwargs={'device': device, 'batch_size': 32}
 )
 
+#---------------------- Pinecone vector store ----------------------
+pc = PineconeClient(api_key=os.getenv("PINECONE_API_KEY"))
+index = pc.Index(INDEX_NAME)
+vectorstore = PineconeVectorStore(index=index, embedding=embed_model, text_key='text')
 
-#---------------Initialing the pinecone instance------------------
-pinecone.init(
-    api_key=os.getenv("PINECONE_API_KEY"),
-    environment=os.getenv("PINECONE_ENV")
-)
+#---------------------- Llama-2 model ----------------------
+hf_auth = os.getenv("HF_AUTH_TOKEN")
 
-#-----------------Creating the Pinecone database if it doesn't exist already-------------
-index_name = 'lawqa-llama2'
-
-if index_name not in pinecone.list_indexes():
-    pinecone.create_index(
-        index_name,
-        dimension=384,
-        metric='cosine'
-    )
-    # wait for index to finish initialization
-    while not pinecone.describe_index(index_name).status['ready']:
-        time.sleep(1)
-
-index = pinecone.Index(index_name)
-index.describe_index_stats()
-
-
-#----------------------importing and preprocessing the data-----------------
-train_data = load_dataset("pile-of-law/pile-of-law", 'r_legaladvice', split="train")
-validation_data = load_dataset("pile-of-law/pile-of-law", 'r_legaladvice', split="validation")
-
-train_set = pd.DataFrame(train_data, columns=["text", "created_timestamp", "downloaded_timestamp", "url"])
-validation_set = pd.DataFrame(validation_data, columns=["text", "created_timestamp", "downloaded_timestamp", "url"])
-
-df = pd.concat([train_set, validation_set])
-df = df.drop(['created_timestamp','downloaded_timestamp'], axis=1)
-df["text"] = df["text"].str.replace("\n","")
-df["Title"] = df['text'].apply(lambda x: x[7:x.find("Question")])
-df["Question"] = df['text'].apply(lambda x: x[x.find("Question")+9:x.find("Answer")])
-df["Answer"] = df["text"].apply(lambda x: x[x.find("Answer")+11:])
-df.columns = ["Text", "Url", "Title", "Question", "Answer"]
-df.drop(["text"], axis=1, inplace=True)
-
-
-#----------------------Storing the data on the database --------------------
-data = df.iloc[:100000]
-
-batch_size = 32
-
-for i in range(0, len(data), batch_size):
-    i_end = min(len(data), i+batch_size)
-    batch = data.iloc[i:i_end]
-    ids = [f"id-{i}" for i, x in batch.iterrows()]
-    texts = [x['Text'] for i, x in batch.iterrows()]
-    embeds = embed_model.embed_documents(texts)
-    # setting the metadata
-    metadata = [
-        {"text": x['Text'][:2000],
-         'source': x['Url']} for i, x in batch.iterrows()
-    ]
-    # storing in the Pineconce database
-    index.upsert(vectors=zip(ids, embeds, metadata))
-
-#---------------------- Defining the model by using the name on Hugging Face ----------------------
-model_id = 'meta-llama/Llama-2-7b-chat-hf'
-
-device = f'cuda:{cuda.current_device()}' if cuda.is_available() else 'cpu'
-
-#----------------------the `bitsandbytes` library is required to be able to load the Llama 2 model----------------------
 bnb_config = transformers.BitsAndBytesConfig(
     load_in_4bit=True,
     bnb_4bit_quant_type='nf4',
@@ -95,70 +40,56 @@ bnb_config = transformers.BitsAndBytesConfig(
     bnb_4bit_compute_dtype=bfloat16
 )
 
-#---------------------- Downloading Llama2 model from Hugging Face using auth token ----------------------
-hf_auth = os.getenv("HF_AUTH_TOKEN")
-model_config = transformers.AutoConfig.from_pretrained(
-    model_id,
-    use_auth_token=hf_auth
-)
-
-
+model_config = transformers.AutoConfig.from_pretrained(MODEL_ID, token=hf_auth)
 model = transformers.AutoModelForCausalLM.from_pretrained(
-    model_id,
+    MODEL_ID,
     trust_remote_code=True,
     config=model_config,
     quantization_config=bnb_config,
     device_map='auto',
-    use_auth_token=hf_auth
+    token=hf_auth
 )
 model.eval()
 print(f"Model loaded on {device}")
 
-#---------------------- Downloading the tokenizer from Hugging Face using auth token ----------------------
-tokenizer = transformers.AutoTokenizer.from_pretrained(
-    model_id,
-    use_auth_token=hf_auth
-)
+tokenizer = transformers.AutoTokenizer.from_pretrained(MODEL_ID, token=hf_auth)
 
-#---------------------- Creating the text generation pipeline-----------------
+#---------------------- Generation pipeline ----------------------
 generate_text = transformers.pipeline(
-    model=model, tokenizer=tokenizer,
+    model=model,
+    tokenizer=tokenizer,
     return_full_text=True,
     task='text-generation',
-    # parameters for the model are set here
-    temperature=0.000000000000000000000000001,  # Controling the randomness of the output
-    max_new_tokens=512,  # maximum number of tokens in the output
-    repetition_penalty=1.1  # to prevent repetition
+    temperature=0.000000000000000000000000001,
+    max_new_tokens=512,
+    repetition_penalty=1.1
 )
 
-#---------------------- Creating the database instance ----------------------
-text_field = 'text'  # field in metadata that contains the text
-
-vectorstore = Pinecone(
-    index, embed_model.embed_query, text_field
-)
-
-#---------------------- Testing the similarity search ----------------------
-query = "I never got any eviction notice from my landlord. One day he came to my home and told me to leave and that id I didn't he was gonna sue me. My question is that can he really do that? please provide sources for your answer."
-
-vectorstore.similarity_search(
-    query,
-    k=3  # returns top 3 most relevant documents
-)
-
-#---------------------- Setting the LLM model ----------------------
+#---------------------- RAG chain ----------------------
 llm = HuggingFacePipeline(pipeline=generate_text)
 
-#---------------------- Initializing the RetrievalQA chain ----------------------
-rag_pipeline = RetrievalQA.from_chain_type(
-    llm=llm, chain_type='stuff',
-    retriever=vectorstore.as_retriever(),
-    return_source_documents=True
+retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+
+prompt = PromptTemplate.from_template(
+    "Use the following legal Q&A context to answer the question.\n\n"
+    "Context:\n{context}\n\n"
+    "Question: {question}\n\nAnswer:"
 )
 
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
 
-#---------------------- Testing the model ----------------------
-query = "I never got any eviction notice from my landlord. One day he came to my home and told me to leave and that id I didn't he was gonna sue me. My question is that can he really do that? please provide sources for your answer."
-result = rag_pipeline({"query": query})
+rag_chain = (
+    RunnableParallel(source_documents=retriever, question=RunnablePassthrough())
+    .assign(context=lambda x: format_docs(x["source_documents"]))
+    .assign(answer=prompt | llm | StrOutputParser())
+)
 
-print(result)
+#---------------------- Query ----------------------
+query = "I never got any eviction notice from my landlord. One day he came to my home and told me to leave and that if I didn't he was gonna sue me. Can he really do that?"
+result = rag_chain.invoke(query)
+
+print("Answer:", result["answer"])
+print("\nSources:")
+for doc in result["source_documents"]:
+    print(" -", doc.metadata.get("source", "unknown"))
