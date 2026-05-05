@@ -1,5 +1,6 @@
 import os
 import transformers
+import sys
 
 from dotenv import load_dotenv
 from pinecone import Pinecone as PineconeClient
@@ -60,7 +61,7 @@ generate_text = transformers.pipeline(
     tokenizer=tokenizer,
     return_full_text=True,
     task='text-generation',
-    temperature=0.000000000000000000000000001,
+    do_sample=False,
     max_new_tokens=512,
     repetition_penalty=1.1
 )
@@ -86,7 +87,8 @@ rag_chain = (
 )
 
 #---------------------- Query ----------------------
-query = "I never got any eviction notice from my landlord. One day he came to my home and told me to leave and that if I didn't he was gonna sue me. Can he really do that?"
+sample_query = "I never got any eviction notice from my landlord. One day he came to my home and told me to leave and that if I didn't he was gonna sue me. Can he really do that?"
+query = sys.argv[1] if len(sys.argv) > 1 else sample_query
 result = rag_chain.invoke(query)
 
 print("Answer:", result["answer"])
