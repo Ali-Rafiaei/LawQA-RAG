@@ -6,7 +6,7 @@ REPO_ID = "alirf/lawqa"
 FILES = {
     "app.py": "app.py",
     "lawqa_demo.py": "lawqa_demo.py",
-    "requirements_space.txt": "requirements.txt",
+    "requirements-space.txt": "requirements.txt",
 }
 
 SPACE_README = """---
