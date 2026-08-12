@@ -1,7 +1,19 @@
+try:
+    import spaces
+except ImportError:
+    spaces = None
+
 import gradio as gr
 from langchain_core.messages import AIMessage, HumanMessage
 
 from lawqa_demo import ask
+
+if spaces is not None:
+
+    @spaces.GPU
+    def zerogpu_startup_probe():
+        pass
+
 
 MAX_HISTORY_MESSAGES = 6
 
