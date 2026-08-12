@@ -1,0 +1,9 @@
+langchain-core==1.5.3
+langchain-classic==1.0.8
+langchain-huggingface==1.2.2
+langchain-pinecone==0.2.13
+langchain-google-genai==4.2.4
+sentence-transformers==5.5.1
+gradio==6.15.2
+pinecone==7.3.0
+python-dotenv==1.2.2
