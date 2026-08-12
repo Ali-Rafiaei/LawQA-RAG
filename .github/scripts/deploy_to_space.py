@@ -10,7 +10,7 @@ FILES = {
 }
 
 SPACE_README = """---
-title: LawQA: A Legal Question Assistant
+title: "LawQA: A Legal Question Assistant"
 emoji: ⚖️
 colorFrom: blue
 colorTo: gray
