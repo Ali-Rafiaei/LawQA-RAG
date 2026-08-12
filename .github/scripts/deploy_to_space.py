@@ -19,7 +19,6 @@ sdk_version: 6.15.2
 python_version: "3.11"
 app_file: app.py
 pinned: false
-short_description: Conversational legal Q&A grounded in r/legaladvice, with memory and structured answers
 ---
 
 Full write-up, source, and original local-Llama-2 version: https://github.com/Ali-Rafiaei/LawQA-RAG
