@@ -16,7 +16,11 @@ load_dotenv()
 EMBED_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
 INDEX_NAME = "lawqa-llama2"
 
-embed_model = HuggingFaceEmbeddings(model_name=EMBED_MODEL_ID)
+embed_model = HuggingFaceEmbeddings(
+    model_name=EMBED_MODEL_ID,
+    model_kwargs={"device": "cpu"},
+)
+
 pc = PineconeClient(
     api_key=os.environ.get("PINECONE_API_KEY"),
 )
