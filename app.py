@@ -40,10 +40,10 @@ def respond(message: str, history: list[dict]) -> str:
 
 demo = gr.ChatInterface(
     respond,
-    title="LawQA — Legal Question Assistant",
+    title="LawQA: Legal Question Assistant",
     description=(
-        "Ask legal questions and follow up naturally — the assistant remembers your "
-        "conversation. Answers are grounded in real cases from r/legaladvice (100k+ posts)."
+        "Ask legal questions and follow up naturally. The assistant remembers your "
+        "conversation, with answers grounded in real cases from r/legaladvice (100k+ posts)."
     ),
     examples=["My landlord entered my apartment without notice. What are my rights?"],
     concurrency_limit=3,
