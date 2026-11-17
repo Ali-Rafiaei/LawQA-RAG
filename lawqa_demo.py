@@ -1,18 +1,23 @@
+import logging
 import os
 
 from dotenv import load_dotenv
+from langchain_anthropic import ChatAnthropic
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_classic.chains.history_aware_retriever import (
     create_history_aware_retriever,
 )
 from langchain_classic.chains.retrieval import create_retrieval_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.runnables import RunnableLambda
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone as PineconeClient
 
 load_dotenv()
+logger = logging.getLogger(__name__)
+
 EMBED_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
 INDEX_NAME = "lawqa-llama2"
 
@@ -22,15 +27,41 @@ embed_model = HuggingFaceEmbeddings(
 )
 
 pc = PineconeClient(
-    api_key=os.environ.get("PINECONE_API_KEY"),
+    api_key=os.environ["PINECONE_API_KEY"].strip(),
 )
 index = pc.Index(INDEX_NAME)
 vectorstore = PineconeVectorStore(index=index, embedding=embed_model, text_key="text")
 retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-3.6-flash", google_api_key=os.environ.get("GOOGLE_API_KEY")
+# Primary: free Gemini. Fail fast when it's overloaded so the fallback can take over.
+# Note: in langchain-google-genai, max_retries counts total attempts (2 = one retry).
+gemini = ChatGoogleGenerativeAI(
+    model="gemini-3.6-flash",
+    google_api_key=os.environ["GOOGLE_API_KEY"].strip(),
+    max_retries=2,
+    timeout=20,
 )
+
+# Fallback: paid Claude, only called when Gemini raises. Spend is capped by the
+# monthly limit on the API key's workspace; max_tokens caps cost per request.
+claude = ChatAnthropic(
+    model="claude-sonnet-5-5",
+    api_key=os.environ["ANTHROPIC_API_KEY"].strip(),
+    max_tokens=4096,
+    effort="low",
+    max_retries=2,
+    timeout=60,
+    betas=["server-side-fallback-2026-07-01"],
+    model_kwargs={"fallbacks": "default"},
+)
+
+
+def _log_fallback(prompt):
+    logger.warning("Gemini call failed; falling back to Claude.")
+    return prompt
+
+
+llm = gemini.with_fallbacks([RunnableLambda(_log_fallback) | claude])
 
 CONTEXTUALIZE_SYSTEM_PROMPT = (
     "Given a chat history and the latest user question, which might reference "
