@@ -3,6 +3,8 @@ try:
 except ImportError:
     spaces = None
 
+import logging
+
 import gradio as gr
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -14,6 +16,8 @@ if spaces is not None:
     def zerogpu_startup_probe():
         pass
 
+
+logger = logging.getLogger(__name__)
 
 MAX_HISTORY_MESSAGES = 6
 
@@ -30,7 +34,14 @@ def to_chat_history(history: list[dict]) -> list:
 
 def respond(message: str, history: list[dict]) -> str:
     chat_history = to_chat_history(history)
-    answer, sources = ask(message, chat_history)
+    try:
+        answer, sources = ask(message, chat_history)
+    except Exception:
+        logger.exception("Both Gemini and Claude failed")
+        return (
+            "Sorry, the assistant is temporarily unavailable. "
+            "Please try again in a minute."
+        )
 
     if sources:
         answer += "\n\n**Sources:**\n" + "\n".join(f"- {s}" for s in sources)
